@@ -289,12 +289,30 @@
     </main>
 
     <script>
-        const initialProducts = [
-            { id: 1, name: 'Bridal Henna Cone - Intricate', description: '', price: 150, stock: 45, image: 'https://images.unsplash.com/photo-1598371839696-5e5bb00b059a?auto=format&fit=crop&w=800&q=80', category: '' },
-            { id: 2, name: 'Organic Jagua Cone', description: '', price: 180, stock: 8, image: 'https://images.unsplash.com/photo-1515022513904-45300d8cc0c2?auto=format&fit=crop&w=800&q=80', category: '' },
-            { id: 3, name: 'Luxury Practice Cone Set', description: '', price: 300, stock: 20, image: 'https://images.unsplash.com/photo-1542037104857-ffbb0b9155fb?auto=format&fit=crop&w=800&q=80', category: '' },
-            { id: 4, name: 'Premium Aftercare Oil', description: '', price: 250, stock: 0, image: 'https://images.unsplash.com/photo-1608248543803-ba4f8c70ae0b?auto=format&fit=crop&w=800&q=80', category: '' },
-        ];
+        const DB_URL = 'https://mazinhennadatabase-default-rtdb.firebaseio.com';
+
+        async function fbGet(path) {
+            try {
+                const res = await fetch(`${DB_URL}/${path}.json`);
+                return await res.json();
+            } catch(e) { console.error('Firebase read error:', e); return null; }
+        }
+
+        async function fbSet(path, data) {
+            try {
+                await fetch(`${DB_URL}/${path}.json`, {
+                    method: 'PUT',
+                    body: JSON.stringify(data),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            } catch(e) { console.error('Firebase write error:', e); }
+        }
+
+        async function fbDelete(path) {
+            try {
+                await fetch(`${DB_URL}/${path}.json`, { method: 'DELETE' });
+            } catch(e) { console.error('Firebase delete error:', e); }
+        }
 
         function adminApp() {
             return {
@@ -344,38 +362,34 @@
                     }, 3000);
                 },
 
-                initApp() {
-                    const savedProducts = localStorage.getItem('mazinHennaProducts');
-                    if (savedProducts) {
-                        this.products = JSON.parse(savedProducts);
-                    } else {
-                        this.products = JSON.parse(JSON.stringify(initialProducts));
-                        this.saveProducts();
-                    }
-                    
-                    const savedCategories = localStorage.getItem('mazinHennaCategories');
-                    if (savedCategories) {
-                        this.categories = JSON.parse(savedCategories);
-                    }
+                async initApp() {
+                    const products = await fbGet('products');
+                    this.products = Array.isArray(products) ? products : (products ? Object.values(products) : []);
 
-                    this.siteLogo = localStorage.getItem('mazinHennaLogo');
+                    const categories = await fbGet('categories');
+                    this.categories = Array.isArray(categories) ? categories : (categories ? Object.values(categories) : []);
 
-                    // Keep updated if storefront window updates stock
-                    window.addEventListener('storage', (e) => {
-                        if (e.key === 'mazinHennaProducts') this.products = JSON.parse(e.newValue);
-                        if (e.key === 'mazinHennaCategories') this.categories = JSON.parse(e.newValue);
-                        if (e.key === 'mazinHennaLogo') this.siteLogo = e.newValue;
+                    const logo = await fbGet('logo');
+                    this.siteLogo = logo || null;
+
+                    // Real-time listener for product stock changes from storefront
+                    const es = new EventSource(`${DB_URL}/products.json?accept=text/event-stream`);
+                    es.addEventListener('put', (e) => {
+                        const data = JSON.parse(e.data);
+                        if (data.data) {
+                            this.products = Array.isArray(data.data) ? data.data : Object.values(data.data);
+                        }
                     });
                 },
 
-                saveProducts(silent = false) {
-                    localStorage.setItem('mazinHennaProducts', JSON.stringify(this.products));
-                    if(!silent) this.showToast('Products saved');
+                async saveProducts(silent = false) {
+                    await fbSet('products', this.products);
+                    if (!silent) this.showToast('Products saved');
                 },
 
-                saveCategories(silent = false) {
-                    localStorage.setItem('mazinHennaCategories', JSON.stringify(this.categories));
-                    if(!silent) this.showToast('Categories saved');
+                async saveCategories(silent = false) {
+                    await fbSet('categories', this.categories);
+                    if (!silent) this.showToast('Categories saved');
                 },
 
                 async readAsBase64(file) {
@@ -392,14 +406,14 @@
                     if (!file) return;
                     const base64 = await this.readAsBase64(file);
                     this.siteLogo = base64;
-                    localStorage.setItem('mazinHennaLogo', base64);
+                    await fbSet('logo', base64);
                     event.target.value = '';
                     this.showToast('Logo updated');
                 },
 
-                removeLogo() {
+                async removeLogo() {
                     this.siteLogo = null;
-                    localStorage.removeItem('mazinHennaLogo');
+                    await fbDelete('logo');
                     this.showToast('Logo removed');
                 },
 
@@ -411,21 +425,21 @@
                     this.newCategory.imagePreview = base64;
                 },
 
-                saveNewCategory() {
+                async saveNewCategory() {
                     if (!this.newCategory.name) {
                         this.showToast('Category name required');
                         return;
                     }
                     this.categories.push({ name: this.newCategory.name, image: this.newCategory.image });
-                    this.saveCategories(true);
+                    await this.saveCategories(true);
                     this.showToast('Category added');
                     this.newCategory = { name: '', image: '', imagePreview: '' };
                 },
 
                 removeCategory(index) {
-                    this.showConfirm('Delete Category', 'Are you sure you want to delete this category?', () => {
+                    this.showConfirm('Delete Category', 'Are you sure you want to delete this category?', async () => {
                         this.categories.splice(index, 1);
-                        this.saveCategories(true);
+                        await this.saveCategories(true);
                         this.showToast('Category deleted');
                     });
                 },
@@ -438,7 +452,7 @@
                     this.newProduct.imagePreview = base64;
                 },
 
-                saveNewProduct() {
+                async saveNewProduct() {
                     if (!this.newProduct.name) {
                         this.showToast('Product name required');
                         return;
@@ -453,15 +467,15 @@
                         stock: Number(this.newProduct.stock) || 0,
                         image: this.newProduct.image 
                     });
-                    this.saveProducts(true);
+                    await this.saveProducts(true);
                     this.showToast('Product added');
                     this.newProduct = { name: '', description: '', category: '', image: '', imagePreview: '', price: '', stock: '' };
                 },
 
                 removeProduct(index) {
-                    this.showConfirm('Delete Product', 'Are you sure you want to delete this product?', () => {
+                    this.showConfirm('Delete Product', 'Are you sure you want to delete this product?', async () => {
                         this.products.splice(index, 1);
-                        this.saveProducts(true);
+                        await this.saveProducts(true);
                         this.showToast('Product deleted');
                     });
                 },
